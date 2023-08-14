@@ -1,0 +1,49 @@
+name: External PR notifier
+
+on:
+  schedule:
+    # Every monday at 08:00 UTC
+    - cron: '0 8 * * 1'
+
+jobs:
+  query_prs:
+    name: Report external PRs
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          sparse-checkout: .github/workflows/external_pr_notifier
+      - id: list_prs
+        name: Get a list of external PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # List non-draft PRs that have 'community' label, excluding bots
+          gh pr list -R uyuni-project/uyuni -l community -s open --json number,title,author,url,isDraft \
+            -q '{"prs": map(select(.isDraft == false and .author.is_bot == false))}' > external_prs.json
+          COUNT=`jq '.prs | length' external_prs.json`
+          echo "::notice::$COUNT PRs with label 'community' found."
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+      - name: Compile email template
+        if: ${{ steps.list_prs.outputs.count > 0 }}
+        uses: cuchi/jinja2-action@v1.2.0
+        with:
+          template: .github/workflows/external_pr_notifier/template.md.j2
+          output_file: template.md
+          data_file: external_prs.json
+      - name: Send weekly summary email
+        if: ${{ steps.list_prs.outputs.count > 0 }}
+        uses: cbbayburt/action-send-mail@v1
+        with:
+          server_address: ${{ secrets.EMAIL_SERVER }}
+          server_port: 587
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "Uyuni Project - Community contributions"
+          to: ${{ secrets.EMAIL_TO }}
+          from: ${{ secrets.EMAIL_FROM }}
+          html_body: file://template.md
+          ignore_cert: true
+          convert_markdown: true
